@@ -246,7 +246,7 @@ On Linux, you may need to set up udev rules:
 ```bash
 # Create udev rule
 sudo tee /etc/udev/rules.d/90-fnirsi.rules << EOF
-SUBSYSTEM=="usb", ATTRS{idVendor}=="0716", MODE="0666"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2e3c", ATTRS{idProduct}=="5558", MODE="0666"
 EOF
 
 # Reload rules
@@ -283,9 +283,9 @@ readouts and charts, a trip counter, crash-safe background recording, session re
 CSV export. See the [website](https://redthoroughbred.github.io/wattbench/) and the
 [user guide](https://redthoroughbred.github.io/wattbench/guide.html).
 
-Because iPhones can't act as a USB host, the app only gets what the meter sends over BLE
-(V, I, W). D+/D-, temperature and protocol triggering remain features of this desktop monitor
-over USB.
+Over Bluetooth the app reads voltage, current and power, plus the USB data-line voltages (D+/D-)
+and the meter's temperature. Protocol triggering remains a feature of this desktop monitor over
+USB, because iPhones can't act as a USB host.
 
 ## 🧪 Tests
 
