@@ -14,9 +14,14 @@ Packet layout (64 bytes, HID IN endpoint):
                  +13 u16 LE temp     (/10     -> degC)
     [62]     unknown
     [63]     CRC-8 (poly 0x39, init 0x42) over bytes [1..62]
+
+Transport: libusb (PyUSB) on Linux. On macOS the kernel HID driver owns the
+interface and libusb can only claim it as root, so there the same 64-byte
+reports go through the OS HID API (hidapi), which needs no special permission.
 """
 
 import logging
+import sys
 import threading
 import time
 from collections import deque
@@ -25,7 +30,14 @@ from datetime import datetime, timedelta
 import usb.core
 import usb.util
 
+try:
+    import hid  # hidapi; the USB transport on macOS
+except ImportError:
+    hid = None
+
 log = logging.getLogger(__name__)
+
+USE_HID = sys.platform == 'darwin'
 
 # (vendor_id, product_id, model, slow_refresh)
 # FNB58 / FNB48S need a 1 s keep-alive; FNB48 / C1 need ~3 ms.
@@ -41,10 +53,12 @@ SAMPLES_PER_PACKET = 4
 SAMPLE_STRIDE = 15
 DATA_PACKET_TYPE = 0x04
 
+# Session: INIT_1, INIT_2, then INIT_2 (FNB58 / FNB48S) or KEEPALIVE (FNB48 / C1);
+# afterwards KEEPALIVE every 1 s / 3 ms. Matches baryluk's logger and OpenFNB58.
 CMD_INIT_1 = b"\xaa\x81" + b"\x00" * 61 + b"\x8e"
 CMD_INIT_2 = b"\xaa\x82" + b"\x00" * 61 + b"\x96"
-CMD_POLL_FAST = b"\xaa\x83" + b"\x00" * 61 + b"\x9e"   # FNB48 / C1
-CMD_POLL_SLOW = CMD_INIT_2                              # FNB58 / FNB48S
+CMD_KEEPALIVE = b"\xaa\x83" + b"\x00" * 61 + b"\x9e"
+INIT_GAP_S = 0.05   # pause between init commands (OpenFNB58)
 
 
 def _build_crc8_table(poly=0x39):
@@ -109,7 +123,9 @@ class USBReader:
     """USB HID communication with FNIRSI power meters."""
 
     def __init__(self):
-        self.device = None
+        self.device = None      # libusb transport
+        self.hid = None         # hidapi transport (macOS)
+        self.hid_ids = None     # (vid, pid) of the open hidapi device
         self.model = None
         self.slow_refresh = False
         self.ep_in = None
@@ -125,6 +141,9 @@ class USBReader:
 
     def connect(self):
         """Find, claim and configure the first known FNIRSI device."""
+        if USE_HID:
+            return self._connect_hid()
+
         for vid, pid, model, slow in KNOWN_DEVICES:
             dev = usb.core.find(idVendor=vid, idProduct=pid)
             if dev is not None:
@@ -155,6 +174,25 @@ class USBReader:
         self.is_connected = True
         log.info("Connected to %s via USB", self.model)
         return True
+
+    def _connect_hid(self):
+        """Open the first known FNIRSI device through hidapi (macOS)."""
+        if hid is None:
+            raise ConnectionError("USB on macOS needs the hidapi package: pip install hidapi")
+        for vid, pid, model, slow in KNOWN_DEVICES:
+            if not hid.enumerate(vid, pid):
+                continue
+            dev = hid.device()
+            try:
+                dev.open(vid, pid)
+            except OSError as e:
+                raise ConnectionError(f"Could not open {model} over USB HID: {e}") from e
+            self.hid, self.hid_ids = dev, (vid, pid)
+            self.model, self.slow_refresh = model, slow
+            self.is_connected = True
+            log.info("Connected to %s via USB HID", model)
+            return True
+        raise ConnectionError("No FNIRSI device found on USB (FNB58/FNB48S/FNB48/C1).")
 
     def _detach_kernel_drivers(self):
         """Detach kernel HID driver on Linux; a no-op on macOS (not implemented there)."""
@@ -192,21 +230,37 @@ class USBReader:
     def stop_reading(self):
         self.is_reading = False
         if self.read_thread and self.read_thread is not threading.current_thread():
-            self.read_thread.join(timeout=6)
+            # Covers one in-flight read (1 s) plus the drain (DRAIN_LIMIT_S).
+            self.read_thread.join(timeout=8)
         self.read_thread = None
 
     def _send(self, cmd):
-        self.ep_out.write(cmd)
+        if self.hid is not None:
+            # Leading 0x00 = report ID; the meter uses unnumbered reports.
+            if self.hid.write(b"\x00" + cmd) < 0:
+                raise OSError(f"HID write failed: {self.hid.error()}")
+        else:
+            self.ep_out.write(cmd)
+
+    def _read(self, timeout_ms=1000):
+        """Read one 64-byte IN report; b'' on timeout. Raises OSError on failure."""
+        if self.hid is not None:
+            return bytes(self.hid.read(64, timeout_ms))
+        try:
+            return bytes(self.ep_in.read(64, timeout=timeout_ms))
+        except usb.core.USBTimeoutError:
+            return b""
 
     def _read_loop(self):
-        poll_cmd = CMD_POLL_SLOW if self.slow_refresh else CMD_POLL_FAST
         refresh = 1.0 if self.slow_refresh else 0.003
+        init_3 = CMD_INIT_2 if self.slow_refresh else CMD_KEEPALIVE
 
         try:
-            self._send(CMD_INIT_1)
-            self._send(CMD_INIT_2)
-            self._send(poll_cmd)
-        except usb.core.USBError as e:
+            self._drain(quiet_ms=50)  # stale reports from an earlier session
+            for cmd in (CMD_INIT_1, CMD_INIT_2, init_3):
+                self._send(cmd)
+                time.sleep(INIT_GAP_S)
+        except OSError as e:  # usb.core.USBError is an OSError too
             log.error("USB handshake failed: %s", e)
             self.is_reading = False
             return
@@ -214,21 +268,17 @@ class USBReader:
         next_poll = time.monotonic() + refresh
         while self.is_reading:
             try:
-                data = self.ep_in.read(64, timeout=5000)
-                for reading in decode_packet(bytes(data)):
-                    self.data_buffer.append(reading)
-                    if self.data_callback:
-                        self.data_callback(reading)
-                if time.monotonic() >= next_poll:
+                data = self._read()
+                if data:
+                    for reading in decode_packet(data):
+                        self.data_buffer.append(reading)
+                        if self.data_callback:
+                            self.data_callback(reading)
+                # Keep-alive on schedule, and straight away if the meter went quiet.
+                if not data or time.monotonic() >= next_poll:
                     next_poll = time.monotonic() + refresh
-                    self._send(poll_cmd)
-            except usb.core.USBTimeoutError:
-                # Device went quiet; re-issue the poll command and keep going.
-                try:
-                    self._send(poll_cmd)
-                except usb.core.USBError:
-                    pass
-            except usb.core.USBError as e:
+                    self._send(CMD_KEEPALIVE)
+            except OSError as e:
                 if self.is_reading:
                     log.error("USB error in read loop: %s", e)
                     time.sleep(0.1)
@@ -236,10 +286,33 @@ class USBReader:
                 log.exception("Unexpected error in USB read loop")
                 time.sleep(0.1)
 
+        self._drain()
+
+    DRAIN_QUIET_MS = 1000
+    DRAIN_LIMIT_S = 5.0
+
+    def _drain(self, quiet_ms=DRAIN_QUIET_MS):
+        """Read (and discard) reports until the meter is quiet for `quiet_ms`.
+
+        A meter left with unread data fills its FIFO and freezes until it is
+        replugged (baryluk's logger documents the same and drains on exit).
+        """
+        deadline = time.monotonic() + self.DRAIN_LIMIT_S
+        drained = 0
+        try:
+            while time.monotonic() < deadline and self._read(quiet_ms):
+                drained += 1
+        except OSError as e:
+            log.debug("USB drain stopped early: %s", e)
+        log.debug("Drained %d reports", drained)
+
     # ------------------------------------------------------------- lifecycle
 
     def disconnect(self):
         self.stop_reading()
+        if self.hid is not None:
+            self.hid.close()
+            self.hid = None
         if self.device is not None:
             try:
                 usb.util.dispose_resources(self.device)
@@ -249,6 +322,16 @@ class USBReader:
         self.is_connected = False
 
     def get_device_info(self):
+        if self.hid is not None:
+            vid, pid = self.hid_ids
+            return {
+                'model': self.model,
+                'vendor_id': f"0x{vid:04x}",
+                'product_id': f"0x{pid:04x}",
+                'manufacturer': self.hid.get_manufacturer_string() or "Unknown",
+                'product': self.hid.get_product_string() or "Unknown",
+                'serial': self.hid.get_serial_number_string() or "Unknown",
+            }
         if not self.device:
             return None
 
@@ -287,7 +370,7 @@ class USBReader:
 
     def trigger_voltage(self, protocol, voltage):
         """Send an (experimental, unverified) protocol trigger command."""
-        if not self.is_connected or not self.ep_out:
+        if not self.is_connected:
             raise ConnectionError("Device not connected")
         protocol = str(protocol).lower()
         if protocol not in self.TRIGGER_COMMANDS:
@@ -301,7 +384,7 @@ class USBReader:
 
     def adjust_qc3_voltage(self, target_voltage):
         """Send an (experimental, unverified) QC 3.0 fine-adjust command (3.6-12.0 V)."""
-        if not self.is_connected or not self.ep_out:
+        if not self.is_connected:
             raise ConnectionError("Device not connected")
         if not 3.6 <= target_voltage <= 12.0:
             raise ValueError("QC 3.0 voltage must be between 3.6V and 12.0V")

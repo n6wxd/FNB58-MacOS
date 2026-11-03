@@ -7,6 +7,7 @@ simple-websocket>=1.0        # WebSocket transport for Flask-SocketIO threading 
 # USB Communication
 pyusb>=1.2.1
 libusb1>=3.1.0
+hidapi>=0.14; sys_platform == "darwin"   # macOS USB transport (libusb can't claim the HID interface)
 
 # Bluetooth Communication
 bleak>=0.22

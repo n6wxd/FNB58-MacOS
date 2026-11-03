@@ -3,7 +3,7 @@ from datetime import datetime
 import pytest
 
 from device.usb_reader import (
-    CMD_INIT_1, CMD_INIT_2, CMD_POLL_FAST, CMD_POLL_SLOW,
+    CMD_INIT_1, CMD_INIT_2, CMD_KEEPALIVE,
     crc8, decode_packet, KNOWN_DEVICES,
 )
 
@@ -38,7 +38,7 @@ def test_crc8_matches_reference_vectors():
     # per the reveng line in baryluk's logger.
     assert crc8(b"123456789") == 0x4B
     # Command frames from the reference implementation carry their own CRC.
-    for cmd in (CMD_INIT_1, CMD_INIT_2, CMD_POLL_FAST, CMD_POLL_SLOW):
+    for cmd in (CMD_INIT_1, CMD_INIT_2, CMD_KEEPALIVE):
         assert crc8(cmd[1:63]) == cmd[63], cmd.hex()
 
 
