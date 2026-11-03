@@ -1,0 +1,3 @@
+# macOS desktop app: install together with ../requirements.txt (build_app.sh does this)
+pywebview>=6.0               # native WKWebView window for desktop.py
+pyinstaller>=6.10            # bundles "FNB58 Monitor.app"

@@ -176,25 +176,42 @@ def api_stop_recording():
             return jsonify({'success': False, 'error': 'Not recording'}), 400
 
         session = device_manager.stop_recording()
-        session_name = session.get('name')
-
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        safe_name = "".join(c for c in (session_name or '') if c.isalnum() or c in (' ', '-', '_')).strip()
-        safe_name = safe_name.replace(' ', '_')
-        filename = f'{safe_name}_{timestamp}.json' if safe_name else f'session_{timestamp}.json'
-        session_file = os.path.join(app.config['SESSION_DIR'], filename)
-
-        with open(session_file, 'w') as f:
-            json.dump(session, f, indent=2)
+        filename = save_session(session)
 
         return jsonify({
             'success': True,
             'session': session,
-            'filename': os.path.basename(session_file),
-            'name': session_name
+            'filename': filename,
+            'name': session.get('name')
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
+
+
+def save_session(session):
+    """Write a stopped recording to SESSION_DIR and return its filename."""
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    safe_name = "".join(c for c in (session.get('name') or '') if c.isalnum() or c in (' ', '-', '_')).strip()
+    safe_name = safe_name.replace(' ', '_')
+    filename = f'{safe_name}_{timestamp}.json' if safe_name else f'session_{timestamp}.json'
+
+    with open(os.path.join(app.config['SESSION_DIR'], filename), 'w') as f:
+        json.dump(session, f, indent=2)
+    return filename
+
+
+def shutdown():
+    """Save any recording in progress and release the meter (desktop app quit).
+
+    Returns:
+        The saved session's filename, or None if nothing was recording.
+    """
+    filename = None
+    if device_manager.is_recording:
+        filename = save_session(device_manager.stop_recording())
+        log.info("Saved in-progress recording as %s", filename)
+    device_manager.disconnect()
+    return filename
 
 
 @app.route('/api/export/csv', methods=['POST'])

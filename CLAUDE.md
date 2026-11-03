@@ -12,6 +12,8 @@ A real-time web application for monitoring FNIRSI FNB58 USB Power Meter via USB 
 fnirsi-web-monitor/
 ├── app.py                      # Main Flask application with REST API and WebSocket
 ├── config.py                   # Configuration management
+├── desktop.py                  # macOS app entry: loopback server + pywebview window
+├── macos/                      # FNB58Monitor.spec (PyInstaller), build_app.sh, icon
 ├── device/                     # Device communication layer
 │   ├── usb_reader.py          # USB HID communication (PyUSB)
 │   ├── bluetooth_reader.py    # Bluetooth LE communication (Bleak)
@@ -22,6 +24,7 @@ fnirsi-web-monitor/
 │   ├── js/
 │   │   ├── common.js          # Shared utilities and API helpers
 │   │   └── dashboard.js       # Real-time chart updates via WebSocket
+│   ├── vendor/                # Pinned Chart.js, zoom plugin, hammerjs, Socket.IO, Tailwind (offline)
 │   └── manifest.json          # PWA manifest
 ├── templates/
 │   ├── base.html              # Base template with navigation
@@ -86,8 +89,8 @@ fnirsi-web-monitor/
 - `decode_packet(data)` - Module-level pure function; parse 64-byte packet into readings
 
 **Device IDs** (from baryluk's logger, verified against hardware):
-- FNB58 `0x2E3C:0x5558`, FNB48S `0x2E3C:0x0049` (slow 1 s keep-alive, `0xAA 0x82`)
-- FNB48 `0x0483:0x003A`, C1 `0x0483:0x003B` (3 ms keep-alive, `0xAA 0x83`)
+- FNB58 `0x2E3C:0x5558`, FNB48S `0x2E3C:0x0049` (keep-alive every 1 s)
+- FNB48 `0x0483:0x003A`, C1 `0x0483:0x003B` (keep-alive every 3 ms)
 
 **Packet Format** (64 bytes):
 - `[0]` = 0xAA, `[1]` = packet type (only `0x04` carries data)
@@ -96,9 +99,14 @@ fnirsi-web-monitor/
 - `[63]` = CRC-8 (poly 0x39, init 0x42) over `[1..62]`; bad-CRC packets are dropped
 
 **Important Notes**:
-- Init sequence `0xAA81`, `0xAA82`, then the per-model poll command, must be sent before data flows
+- Session (matches baryluk's logger and OpenFNB58; verified on an FNB58 over macOS HID): drain stale
+  reports, send `0xAA81`, `0xAA82`, then `0xAA82` (FNB58/FNB48S) or `0xAA83` (FNB48/C1), 50 ms apart;
+  then keep-alive `CMD_KEEPALIVE` (`0xAA83`) for every model. Re-sending `0xAA82` as the keep-alive froze the meter.
+- **Drain on stop** (`_drain()`): a meter left with unread reports fills its FIFO and freezes (even EP0 stops
+  answering) until replugged. Never close the device without draining; `disconnect()` does it (~1.5 s).
+- Transport: **macOS uses hidapi** (`USE_HID`, `hid` module) - the kernel HID driver owns the interface and
+  libusb gets "Access denied" without root. Linux uses libusb (PyUSB) with kernel-driver detach + udev rules.
 - `trigger_voltage()` / `adjust_qc3_voltage()` are EXPERIMENTAL and unverified - the API reports "command sent", never "voltage changed"
-- Device may require udev rules on Linux; macOS needs no kernel-driver detach
 - Always call `disconnect()` to release device
 
 ### 2. Bluetooth Reader (`device/bluetooth_reader.py`)
@@ -341,10 +349,13 @@ SESSION_DIR / EXPORT_DIR         # overridable via env; tests point them at tmp 
 - **NumPy 1.26**: Numerical operations
 - **Pandas 2.1**: Data processing
 
-### Frontend (CDN)
-- **Tailwind CSS**: Utility-first styling
-- **Chart.js 4**: Interactive charts
-- **Socket.IO Client 4**: WebSocket client
+### Frontend (vendored in `static/vendor/`, no CDN at runtime)
+- **Tailwind CSS 3.4.17** (play CDN script, classic page only)
+- **Chart.js 4.4.0** + chartjs-plugin-zoom 2.0.1 + hammerjs 2.0.8
+- **Socket.IO Client 4.5.4**
+
+### macOS app (`macos/requirements.txt`)
+- **pywebview 6**: WKWebView window; **PyInstaller 6**: bundling. `hidapi` (in `requirements.txt`, darwin only) is the USB transport.
 
 ## Development Workflow
 
@@ -479,7 +490,7 @@ print(devices)
 - [ ] Advanced statistics (FFT, harmonics)
 - [ ] Comparison mode (overlay sessions)
 - [x] Mobile native app (WattBench on the App Store, separate private repo)
-- [ ] Desktop app (Electron)
+- [x] Desktop app (macOS: `FNB58 Monitor.app`, PyInstaller + pywebview; see `macos/README.md`)
 - [ ] Cloud sync and sharing
 
 ### Code Quality
@@ -512,6 +523,14 @@ print(devices)
 ```bash
 python start.py
 ```
+
+### Build the macOS App
+```bash
+macos/build_app.sh [--dmg]   # → dist/FNB58 Monitor.app; data in ~/Library/Application Support/FNB58 Monitor
+```
+`desktop.py` sets `FLASK_CONFIG=production`, `SESSION_DIR`/`EXPORT_DIR` and binds 127.0.0.1 before importing
+`app`. Its window `closing` handler calls `app.shutdown()` (save recording, drain + release meter) - it runs
+synchronously for both the close button and ⌘Q (⌘Q never returns from `webview.start()`).
 
 ### Run Tests
 ```bash
