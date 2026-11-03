@@ -55,6 +55,23 @@ def test_recording_flow_saves_named_session(app_client):
     assert client.get(f"/api/sessions/{stop['filename']}").status_code == 404
 
 
+def test_shutdown_saves_recording_and_disconnects(app_client):
+    client, mod = app_client
+    connect(client)
+    client.post('/api/recording/start', json={'name': 'Quit Mid Run'})
+    reader = mod.device_manager.reader
+    for r in reading_series(5):
+        reader.push(r)
+
+    filename = mod.shutdown()
+    assert filename.startswith('Quit_Mid_Run_')
+    assert reader.disconnect_calls == 1
+    assert client.get('/api/status').get_json()['connected'] is False
+    assert client.get(f'/api/sessions/{filename}').get_json()['session']['stats']['samples_collected'] == 5
+
+    assert mod.shutdown() is None  # idle: nothing to save
+
+
 def test_recording_requires_connection(app_client):
     client, _ = app_client
     assert client.post('/api/recording/start', json={}).status_code == 400

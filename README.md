@@ -126,9 +126,10 @@ Monitor voltage, current, power, and more in real-time through your web browser.
 
 ## 🚀 Quick Start
 
-**Two ways to run:**
+**Three ways to run:**
 1. **🐳 Docker** (Recommended) - Easy deployment, no dependencies
 2. **🐍 Python** - Native installation
+3. **🍎 macOS app** - `FNB58 Monitor.app`, a native window around the same dashboard
 
 ### Option 1: Docker (Recommended)
 
@@ -179,11 +180,9 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. **For USB support on macOS/Linux**, you may need libusb:
+4. **For USB support on Linux**, you need libusb (macOS reads the meter through
+   the system HID API via `hidapi`, which `requirements.txt` already installs):
 ```bash
-# macOS
-brew install libusb
-
 # Ubuntu/Debian
 sudo apt-get install libusb-1.0-0-dev
 
@@ -200,6 +199,19 @@ python start.py
 ```
 http://localhost:5001
 ```
+
+### Option 3: macOS app
+
+Build a double-clickable `FNB58 Monitor.app` (needs [uv](https://docs.astral.sh/uv/): `brew install uv`):
+
+```bash
+macos/build_app.sh          # → dist/FNB58 Monitor.app
+macos/build_app.sh --dmg    # …plus dist/FNB58-Monitor-1.0.0.dmg
+```
+
+The app bundles Python and every dependency, works offline, and shows the dashboard in its own
+window. Sessions are kept in `~/Library/Application Support/FNB58 Monitor/`; quitting saves a
+recording in progress. See [macos/README.md](macos/README.md) for details.
 
 ## 📖 Usage
 
@@ -303,15 +315,18 @@ statistics/recording, and the Flask API with a fake device. No hardware required
 fnirsi-web-monitor/
 ├── app.py                 # Main Flask application
 ├── config.py              # Configuration
+├── desktop.py             # macOS app entry point (native window)
 ├── requirements.txt       # Python dependencies
 ├── device/                # Device communication
 │   ├── usb_reader.py      # USB HID communication
 │   ├── bluetooth_reader.py # Bluetooth LE communication
 │   ├── device_manager.py  # Connection management
 │   └── data_processor.py  # Data analysis
+├── macos/                 # macOS app build (PyInstaller spec, build script, icon)
 ├── static/                # Frontend assets
 │   ├── css/
 │   ├── js/
+│   ├── vendor/            # Chart.js, Socket.IO, … (pinned, so it works offline)
 │   └── manifest.json      # PWA manifest
 └── templates/             # HTML templates
     ├── base.html
@@ -366,6 +381,10 @@ Contributions are welcome! This project is designed to be:
 - Try a different USB port
 - Check udev rules (Linux)
 - Run with sudo (temporary test)
+
+### Meter connects over USB but sends no data
+The meter freezes if a program stops reading it without draining its buffer (a crash or force-quit
+can do this). Unplug and replug its USB cable. The monitor drains the meter on every disconnect and quit.
 
 ### Bluetooth connection fails
 - Ensure device is in range

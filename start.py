@@ -18,6 +18,8 @@ def check_python_version():
 
 def check_dependencies():
     required = ['flask', 'flask_socketio', 'simple_websocket', 'usb', 'bleak']
+    if sys.platform == 'darwin':
+        required.append('hid')  # hidapi: the USB transport on macOS
     missing = []
     for package in required:
         try:
@@ -36,10 +38,15 @@ def check_dependencies():
 def check_device():
     print("\n🔍 Checking for FNIRSI device...")
     try:
-        import usb.core
-        from device.usb_reader import KNOWN_DEVICES
+        from device.usb_reader import KNOWN_DEVICES, USE_HID
+        if USE_HID:
+            import hid
+            present = lambda vid, pid: bool(hid.enumerate(vid, pid))  # noqa: E731
+        else:
+            import usb.core
+            present = lambda vid, pid: usb.core.find(idVendor=vid, idProduct=pid) is not None  # noqa: E731
         for vid, pid, model, _ in KNOWN_DEVICES:
-            if usb.core.find(idVendor=vid, idProduct=pid) is not None:
+            if present(vid, pid):
                 print(f"✓ {model} detected on USB")
                 return
         print("⚠️  No USB device detected (Bluetooth may still work)")
