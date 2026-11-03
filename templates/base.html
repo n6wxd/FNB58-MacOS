@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}FNIRSI FNB58 Monitor{% endblock %}</title>
     
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    
-    <!-- Socket.IO -->
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <!-- Tailwind CSS (vendored play CDN 3.4.17; works offline) -->
+    <script src="{{ url_for('static', filename='vendor/tailwindcss-3.4.17.js') }}"></script>
+
+    <!-- Chart.js 4.4.0 -->
+    <script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+
+    <!-- Socket.IO 4.5.4 -->
+    <script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
 
     <!-- Custom CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">

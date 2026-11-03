@@ -5,15 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}FNIRSI FNB58 Professional{% endblock %}</title>
 
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <!-- Vendored in static/vendor/ so the dashboard works offline -->
+    <!-- Chart.js 4.4.0 -->
+    <script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
 
-    <!-- Chart.js Zoom Plugin -->
-    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <!-- Chart.js Zoom Plugin 2.0.1 (+ hammerjs 2.0.8) -->
+    <script src="{{ url_for('static', filename='vendor/hammer.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/chartjs-plugin-zoom.min.js') }}"></script>
 
-    <!-- Socket.IO -->
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <!-- Socket.IO 4.5.4 -->
+    <script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
 
     <!-- Custom Professional CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/professional.css') }}">
